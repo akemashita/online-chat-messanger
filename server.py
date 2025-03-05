@@ -13,11 +13,12 @@ sock.bind((server_address, server_port))
 
 # クライアントからの接続を待つ処理
 while True:
-    print("\nwaiting to recieve message")
+    print("\nwaiting to receive message")
     data, address = sock.recvfrom(4096)
 
-    print("received {} bytes from".format(len(data), address))
-    print(data)
+    print("received {} bytes from {}".format(len(data), address))
+    # print("received message: ", data.decode("utf-8"))
+    print("received username: ", data.decode("utf-8"))
 
     if data:
         sent = sock.sendto(data, address)

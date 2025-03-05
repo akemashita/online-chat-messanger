@@ -8,21 +8,28 @@ sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 server_address = input("Type in the server's address to connect to: ")
 server_port = 9001
 
-address = ""
-port = 9050
-message = b"Message to send to the client."
+# ユーザ名を入力させる
+username = input("ユーザ名を入力してください。\n> ")
 
+# クライアント側のポートは OS に自動的に割り当ててもらう
+address = ""
+port = 0
 sock.bind((address, port))
 
 try:
-    print("sending {!r}".format(message))
+    while True:
+        # メッセージを入力させる
+        message = input("送信するメッセージを入力してください。\n> ").encode("utf-8")
 
-    sent = sock.sendto(message, (server_address, server_port))
-    print("Send {} bytes".format(sent))
+        if not message:
+            break  # からメッセージで終了
 
-    print("waiting to receive")
-    data, server = sock.recvfrom(4096)
-    print("received {!r}".format(data))
+        sent = sock.sendto(message, (server_address, server_port))
+        print("Send {} bytes".format(sent))
+
+        print("waiting to receive")
+        data, server = sock.recvfrom(4096)
+        print("received: ", data.decode("utf-8"))
 
 finally:
     print("closing socket")
