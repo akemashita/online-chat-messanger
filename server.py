@@ -11,6 +11,16 @@ print("starting up on port {}".format(server_port))
 
 sock.bind((server_address, server_port))
 
+# クライアントを管理する
+users_dict = {}
+
+
+def check_user(username, address):
+    if not username in users_dict:
+        users_dict[username] = address
+        print(f"[DEBUG] users_dict: {users_dict}")
+
+
 # クライアントからの接続を待つ処理
 while True:
     print("\nwaiting to receive message")
@@ -35,6 +45,9 @@ while True:
     print(f"  - Username: {username} (length: {username_len})")
     print(f"  - Message: {message}")
 
+    check_user(username, address)
+
     if data:
-        sent = sock.sendto(data, address)
-        print("sent {} bytes back to {}".format(sent, address))
+        for key in users_dict:
+            sent = sock.sendto(data, users_dict[key])
+            print("sent {} bytes back to {}".format(sent, users_dict[key]))
