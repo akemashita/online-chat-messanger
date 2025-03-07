@@ -23,7 +23,7 @@ def send_receive_message(
         try:
             #### メッセージ送信 ####
             if not send_queue.empty():
-                own_message = send_queue.get()  # データが来るまで待機
+                own_message = send_queue.get()
                 own_message_bytes = own_message.encode("utf-8")
 
                 # 送信データを作成（serialize）
@@ -73,11 +73,11 @@ def input_message(send_queue, receive_queue):
         )  # １行上に移動、入力行をクリア、１行上に移動
         sys.stdout.flush()
 
+        send_queue.put(message)
+
         if message.lower() == "exit":
             receive_queue.put(["exit", "exit"])
             break  # スレッドを終了
-
-        send_queue.put(message)
 
 
 def print_message(sender, message):
@@ -148,5 +148,5 @@ if __name__ == "__main__":
                         print_message("YOU", receive_message)
 
     finally:
-        print("closing socket")
+        print("\nclosing socket")
         sock.close()
