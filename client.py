@@ -68,6 +68,8 @@ def input_message(send_queue, receive_queue):
     while True:
         # メッセージを入力させる
         message = input("\n> ")
+
+        # 入力行を削除してサーバから受信した行のみを表示する
         sys.stdout.write(
             "\033[F\033[K\033[F"
         )  # １行上に移動、入力行をクリア、１行上に移動
