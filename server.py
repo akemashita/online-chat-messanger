@@ -11,7 +11,7 @@ import queue
 ###########
 session_lifetime_seconds = 30
 lifetime_check_interval_seconds = 10
-lifetime_alert_second = 20
+lifetime_alert_seconds = 20
 goodbye_message = "{} さんの接続が終了しました。"
 alert_message = "送信がない場合、残り {} 秒ほどで接続が終了します。"
 
@@ -56,6 +56,9 @@ def check_users_lifetime(users_dict, exit_user_queue):
     while True:
         to_remove = []
         print(f"[DEBUG] users_dict:\n{users_dict}")
+
+        time.sleep(lifetime_check_interval_seconds)
+
         for username in list(
             users_dict.keys()
         ):  # 辞書サイズが変わるため、キーをリストに変換してループ
@@ -67,7 +70,7 @@ def check_users_lifetime(users_dict, exit_user_queue):
                 exit_user_queue.put(username)
 
             elif (lifetime_check_interval_seconds < remaining_lifetime) and (
-                remaining_lifetime <= lifetime_alert_second
+                remaining_lifetime <= lifetime_alert_seconds
             ):
                 adminname = "admin"
                 adminname_bytes = adminname.encode("utf-8")
@@ -87,7 +90,6 @@ def check_users_lifetime(users_dict, exit_user_queue):
             del users_dict[username]
             exit_user_queue.put(username)
 
-        time.sleep(lifetime_check_interval_seconds)
 
 
 # タイムアウト監視スレッドを開始
