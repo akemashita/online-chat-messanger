@@ -5,6 +5,7 @@ import socket
 import threading
 import time
 import queue
+import asyncio
 
 
 class UDPChatServer:
@@ -29,32 +30,58 @@ class UDPChatServer:
         self.goodbye_message = "{} さんの接続が終了しました。"
         self.alert_message = "送信がない場合、残り {} 秒ほどで接続が終了します。"
         self.packet_count = 0
+        self.semaphore = asyncio.Semaphore(100)  # 最大100並列処理
 
         # ソケット設定
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2**24)
         self.sock.bind((server_address, server_port))
+        self.sock.setblocking(False)
 
         # クライアントを管理する
         self.users_dict = {}
 
         # スレッド間通信用
-        self.exit_user_queue = queue.Queue()
+        self.exit_user_queue = asyncio.Queue()
+        self.message_queue = asyncio.Queue()
 
-    def start(self, debug_mode):
+    async def start(self, debug_mode):
         """サーバを起動してクライアントからのメッセージを待つ"""
         self.debug_mode = debug_mode
         print(f"starting up on port {self.server_address}:{self.server_port}")
 
-        # タイムアウト監視スレッドを起動する
-        threading.Thread(target=self.check_users_lifetime, daemon=True).start()
+        # ソケットの読み込みイベントをループに追加
+        loop.add_reader(self.sock.fileno(), self.receive_message)
 
+        # タイムアウト監視をタスクとして開始する
+        asyncio.create_task(self.check_users_lifetime())
+
+        # 非同期でメッセージを処理
         while True:
-            self.receive_message()
+            data, addr = await self.message_queue.get()
+            asyncio.create_task(self.handle_message(data, addr))
 
     ##########
     # 以下、処理
     ##########
+    def receive_message(self):
+        """受信イベントで呼び出されるコールバック"""
+        try:
+            data, addr = self.sock.recvfrom(4096)
+            self.packet_count += 1
+            self.message_queue.put_nowait((data, addr))
+        except BlockingIOError:
+            pass
+        except Exception as e:
+            print(f"[ERROR] {e}")
+
+    async def send_data(self, data, addr):
+        """非同期でソケットにデータを送信"""
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self.sock.sendto, data, addr)
+
     def show_users(self):
+        """現在の接続ユーザと受信累計パケット数を表示"""
         # print(f"[DEBUG] users_dict:\n {self.users_dict}")
         print(f"[DEBUG] Active users: {len(self.users_dict)}, Received packets: {self.packet_count}")
 
@@ -62,27 +89,22 @@ class UDPChatServer:
         """ユーザの存在を確認し、リストに追加する"""
         if not username in self.users_dict:
             self.users_dict[username] = [address, self.session_lifetime_seconds]
-            self.show_users()
+            # self.show_users()
             return False
 
-        else:
-            if message != "exit":
-                self.users_dict[username][
-                    1
-                ] = (
-                    self.session_lifetime_seconds
-                )  # メッセージを受信するたびに生存時間を戻す
+        if message == "exit":
+            del self.users_dict[username]
+            return True
 
-            else:
-                del self.users_dict[username]
-                return True
+        # メッセージを受信するたびに生存時間を戻す
+        self.users_dict[username][1] = self.session_lifetime_seconds
+        return False
 
-    def check_users_lifetime(self):
+    async def check_users_lifetime(self):
         """クライアントの生存時間を監視するスレッド"""
         while True:
             self.show_users()
-
-            time.sleep(self.lifetime_check_interval_seconds)
+            await asyncio.sleep(self.lifetime_check_interval_seconds)
 
             for username in list(
                 self.users_dict.keys()
@@ -93,16 +115,16 @@ class UDPChatServer:
                 # タイムアウトしたユーザを削除
                 if remaining_lifetime <= 0:
                     del self.users_dict[username]
-                    self.exit_user_queue.put(username)
+                    await self.exit_user_queue.put(username)
 
                 elif (
                     self.lifetime_check_interval_seconds
                     < remaining_lifetime
                     <= self.lifetime_alert_seconds
                 ):
-                    self.send_alert(username)
+                    await self.send_alert(username)
 
-    def send_alert(self, username):
+    async def send_alert(self, username):
         """接続が切れそうなユーザに警告を送信"""
         adminname_bytes = self.adminname.encode("utf-8")
         adminname_len = len(adminname_bytes)
@@ -111,71 +133,70 @@ class UDPChatServer:
         ).encode("utf-8")
         send_alert = bytes([adminname_len]) + adminname_bytes + alert_message_bytes
 
-        self.sock.sendto(send_alert, self.users_dict[username][0])
-        if self.debug_mode:
-            print(f"sent alert message to {self.users_dict[username][0]}")
+        await self.send_data(send_alert, self.users_dict[username][0])
 
-    def broadcast(self, data):
+        # if self.debug_mode:
+        #     print(f"sent alert message to {self.users_dict[username][0]}")
+
+    async def broadcast(self, data):
         """全クライアントにメッセージを送信"""
         current_users = self.users_dict.copy()
-        number_current_users = len(current_users)
+        # number_current_users = len(current_users)
         for user, (addr, _) in current_users.items():
-            self.sock.sendto(data, addr)
-            # print(f"sent message to {addr}")
+            await self.send_data(data, addr)
+            await asyncio.sleep(0)
         # if self.debug_mode:
             # print(f"sent message to {number_current_users} users")
 
-    def notify_exit(self, username):
+    async def notify_exit(self, username):
         """ユーザ退出メッセージを全クライアントに送信"""
         goodbye_message_bytes = self.goodbye_message.format(username).encode("utf-8")
         adminname_bytes = self.adminname.encode("utf-8")
         adminname_len = len(adminname_bytes)
         send_data = bytes([adminname_len]) + adminname_bytes + goodbye_message_bytes
 
-        self.broadcast(send_data)
+        await self.broadcast(send_data)
         if self.debug_mode:
             print(f"[DEBUG] {username} has left the chat.")
 
-    def receive_message(self):
+    async def handle_message(self, data, address):
         """クライアントからのメッセージを受信して処理する"""
-        # print("\nwaiting to receive message")
-        data, address = self.sock.recvfrom(4096)
+        async with self.semaphore:
+            # print("\nwaiting to receive message")
+            if not data:
+                return
 
-        if not data:
-            return
+            # バイト列をそのまま表示する
+            # print(f"[DEBUG] Raw received data: {data}")
 
-        self.packet_count += 1
+            # 受信したメッセージを分解する（deserialize）
+            # 最初の１バイトを username_len として読み取る
+            username_len = data[0]
 
-        # バイト列をそのまま表示する
-        # print(f"[DEBUG] Raw received data: {data}")
+            # 次の username_len バイトがユーザ名
+            username_bytes = data[1 : 1 + username_len]
+            username = username_bytes.decode("utf-8")
 
-        # 受信したメッセージを分解する（deserialize）
-        # 最初の１バイトを username_len として読み取る
-        username_len = data[0]
+            # 残りのバイトがメッセージ
+            message_bytes = data[1 + username_len :]
+            message = message_bytes.decode("utf-8")
 
-        # 次の username_len バイトがユーザ名
-        username_bytes = data[1 : 1 + username_len]
-        username = username_bytes.decode("utf-8")
+            # print(f"[DEBUG] Received bytes from {address}")
+            # print(f"  - Username: {username} (length: {username_len})")
+            # print(f"  - Message: {message}")
 
-        # 残りのバイトがメッセージ
-        message_bytes = data[1 + username_len :]
-        message = message_bytes.decode("utf-8")
+            is_goodbye_message = self.check_user(username, address, message)
 
-        # print(f"[DEBUG] Received bytes from {address}")
-        # print(f"  - Username: {username} (length: {username_len})")
-        # print(f"  - Message: {message}")
+            if is_goodbye_message:
+                await self.notify_exit(username)
+            else:
+                await self.broadcast(data)
 
-        is_goodbye_message = self.check_user(username, address, message)
-
-        if is_goodbye_message:
-            self.notify_exit(username)
-        else:
-            self.broadcast(data)
-
+async def main():
+    server = UDPChatServer()
+    await server.start(debug_mode=True)
 
 # サーバの起動
 if __name__ == "__main__":
-    debug_mode = True
-
-    server = UDPChatServer()
-    server.start(debug_mode)
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
