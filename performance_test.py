@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 import subprocess
 import time
-import random
 
-NUM_CLIENTS = 1000
+NUM_CLIENTS = 40
 
 # クライアントを並列に起動
 processes = []
