@@ -28,6 +28,7 @@ class UDPChatServer:
         self.lifetime_alert_seconds = alert_message
         self.goodbye_message = "{} さんの接続が終了しました。"
         self.alert_message = "送信がない場合、残り {} 秒ほどで接続が終了します。"
+        self.packet_count = 0
 
         # ソケット設定
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -55,7 +56,7 @@ class UDPChatServer:
     ##########
     def show_users(self):
         # print(f"[DEBUG] users_dict:\n {self.users_dict}")
-        print(f"[DEBUG] Active users: {len(self.users_dict)}")
+        print(f"[DEBUG] Active users: {len(self.users_dict)}, Received packets: {self.packet_count}")
 
     def check_user(self, username, address, message):
         """ユーザの存在を確認し、リストに追加する"""
@@ -121,8 +122,8 @@ class UDPChatServer:
         for user, (addr, _) in current_users.items():
             self.sock.sendto(data, addr)
             # print(f"sent message to {addr}")
-        if self.debug_mode:
-            print(f"sent message to {number_current_users} users")
+        # if self.debug_mode:
+            # print(f"sent message to {number_current_users} users")
 
     def notify_exit(self, username):
         """ユーザ退出メッセージを全クライアントに送信"""
@@ -142,6 +143,8 @@ class UDPChatServer:
 
         if not data:
             return
+
+        self.packet_count += 1
 
         # バイト列をそのまま表示する
         # print(f"[DEBUG] Raw received data: {data}")

@@ -5,13 +5,13 @@ import sys
 import random
 import socket
 
-THREADS_PER_PROCESS = 25
+THREADS_PER_PROCESS = 20
 MESSAGE_PER_CLIENT = 10
 
 SERVER_ADDRESS = "0.0.0.0"
 SERVER_PORT = 9001
-SEND_INTERVAL_MIN = 0.01
-SEND_INTERVAL_MAX = 0.5
+SEND_INTERVAL_MIN = 0.001
+SEND_INTERVAL_MAX = 0.05
 WAIT_BEFORE_MESSAGE_SEND = 30
 
 
@@ -62,7 +62,7 @@ def run_client(client_id, thread_id):
 
 
 def start_threads(client_id):
-    """100スレッドを生成して直接UDP通信"""
+    """スレッドを生成して直接UDP通信"""
     threads = []
 
     for i in range(THREADS_PER_PROCESS):

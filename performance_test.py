@@ -2,7 +2,7 @@
 import subprocess
 import time
 
-NUM_CLIENTS = 40
+NUM_CLIENTS = 50
 
 # クライアントを並列に起動
 processes = []
