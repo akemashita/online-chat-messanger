@@ -2,6 +2,7 @@
 import subprocess
 import time
 import sys
+import random
 
 MESSAGE_PER_CLIENT = 10
 
@@ -28,14 +29,17 @@ def run_client(client_id):
 
         process.stdin.write(username)
         process.stdin.flush()
-        time.sleep(0.1)
+        time.sleep(
+            60
+        )  # ユーザを登録したあとすべてのクライアント（サブプロセス）が起動するまで待つ
 
         # メッセージの繰り返し送信
         for i in range(MESSAGE_PER_CLIENT):
             message = f"test message {i}\n"
             process.stdin.write(message)
             process.stdin.flush()
-            time.sleep(1)
+            send_interval = random()
+            time.sleep(send_interval)
 
     except Exception as e:
         print(f"Client {client_id} encountered an error: {e}")
