@@ -152,6 +152,10 @@ class UDPClient:
             )  # １行上に移動、入力行をクリア、１行上に移動
             sys.stdout.flush()
 
+            if not message:
+                # 入力がなかった場合はサーバに送信しない
+                continue
+
             self.send_queue.put(message)
 
             if message.lower() == "exit":
