@@ -13,7 +13,7 @@ class UDPChatServer:
         self,
         server_address="0.0.0.0",
         server_port=9001,
-        session_lifetime=120,
+        session_lifetime=1800,
         check_interval=10,
         alert_message=20,
     ):
@@ -21,6 +21,7 @@ class UDPChatServer:
         # 設定情報
         ###########
         self.debug_mode = False
+        self.minimum_message = False
         self.adminname = "admin"
         self.server_address = server_address
         self.server_port = server_port
@@ -31,6 +32,7 @@ class UDPChatServer:
         self.alert_message = "送信がない場合、残り {} 秒ほどで接続が終了します。"
         self.packet_count = 0
         self.semaphore = asyncio.Semaphore(100)  # 最大100並列処理
+        self.lock = asyncio.Lock()
 
         # ソケット設定
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -43,23 +45,27 @@ class UDPChatServer:
 
         # スレッド間通信用
         self.exit_user_queue = asyncio.Queue()
-        self.message_queue = asyncio.Queue()
+        self.message_queue = asyncio.Queue(maxsize=10000)
 
-    async def start(self, debug_mode):
+    async def start(self, debug_mode, minimum_message):
         """サーバを起動してクライアントからのメッセージを待つ"""
         self.debug_mode = debug_mode
+        self.minimum_message = minimum_message
         print(f"starting up on port {self.server_address}:{self.server_port}")
+
+        # ループを明示的に取得
+        loop = asyncio.get_running_loop()
 
         # ソケットの読み込みイベントをループに追加
         loop.add_reader(self.sock.fileno(), self.receive_message)
 
-        # タイムアウト監視をタスクとして開始する
+        # タイムアウト監視をタスクとして開始
         asyncio.create_task(self.check_users_lifetime())
 
         # 非同期でメッセージを処理
-        while True:
-            data, addr = await self.message_queue.get()
-            asyncio.create_task(self.handle_message(data, addr))
+        asyncio.create_task(self.process_incoming_packets())
+
+        await asyncio.Event().wait()
 
     ##########
     # 以下、処理
@@ -69,36 +75,56 @@ class UDPChatServer:
         try:
             data, addr = self.sock.recvfrom(4096)
             self.packet_count += 1
-            self.message_queue.put_nowait((data, addr))
+
+            # キューが満杯になっても無視しない
+            try:
+                self.message_queue.put_nowait((data, addr))
+            except asyncio.QueueFull:
+                print("[WARNING] Message queue is full. Dropping packet.")
+
         except BlockingIOError:
             pass
         except Exception as e:
             print(f"[ERROR] {e}")
 
+    async def process_incoming_packets(self):
+        while True:
+            data, addr = await self.message_queue.get()
+            asyncio.create_task(self.handle_message(data, addr))
+
     async def send_data(self, data, addr):
         """非同期でソケットにデータを送信"""
         loop = asyncio.get_running_loop()
+
+        if not self.minimum_message:
+            print(f"[DEBUG] Sending data to {addr} following message: {data}", flush=True)
         await loop.run_in_executor(None, self.sock.sendto, data, addr)
 
     def show_users(self):
         """現在の接続ユーザと受信累計パケット数を表示"""
-        # print(f"[DEBUG] users_dict:\n {self.users_dict}")
         print(f"[DEBUG] Active users: {len(self.users_dict)}, Received packets: {self.packet_count}")
+        if not self.minimum_message:
+            print(f"[DEBUG] users_dict:\n {self.users_dict}")
 
-    def check_user(self, username, address, message):
+    async def check_user(self, username, address, message):
         """ユーザの存在を確認し、リストに追加する"""
-        if not username in self.users_dict:
-            self.users_dict[username] = [address, self.session_lifetime_seconds]
-            # self.show_users()
+        # 先に存在確認のみ行う
+        if username in self.users_dict:
+            if message == "exit":
+                async with self.lock:
+                    del self.users_dict[username]
+                return True
+
+            # メッセージを受信するたびに生存時間を戻す
+            self.users_dict[username][1] = self.session_lifetime_seconds
             return False
 
-        if message == "exit":
-            del self.users_dict[username]
-            return True
+        async with self.lock:
+            self.users_dict[username] = [address, self.session_lifetime_seconds]
+            if not self.minimum_message:
+                self.show_users()
+            return False
 
-        # メッセージを受信するたびに生存時間を戻す
-        self.users_dict[username][1] = self.session_lifetime_seconds
-        return False
 
     async def check_users_lifetime(self):
         """クライアントの生存時間を監視するスレッド"""
@@ -106,15 +132,15 @@ class UDPChatServer:
             self.show_users()
             await asyncio.sleep(self.lifetime_check_interval_seconds)
 
-            for username in list(
-                self.users_dict.keys()
-            ):  # 辞書サイズが変わるため、キーをリストに変換してループ
+            # 辞書サイズが変わるため、キーをリストに変換してループ
+            for username in list(self.users_dict.keys()):
                 self.users_dict[username][1] -= self.lifetime_check_interval_seconds
                 remaining_lifetime = self.users_dict[username][1]
 
                 # タイムアウトしたユーザを削除
                 if remaining_lifetime <= 0:
-                    del self.users_dict[username]
+                    async with self.lock:
+                        del self.users_dict[username]
                     await self.exit_user_queue.put(username)
 
                 elif (
@@ -135,18 +161,19 @@ class UDPChatServer:
 
         await self.send_data(send_alert, self.users_dict[username][0])
 
-        # if self.debug_mode:
-        #     print(f"sent alert message to {self.users_dict[username][0]}")
+        if self.debug_mode and not self.minimum_message:
+            print(f"sent alert message to {self.users_dict[username][0]}")
 
     async def broadcast(self, data):
         """全クライアントにメッセージを送信"""
         current_users = self.users_dict.copy()
-        # number_current_users = len(current_users)
+        number_current_users = len(current_users)
         for user, (addr, _) in current_users.items():
             await self.send_data(data, addr)
             await asyncio.sleep(0)
-        # if self.debug_mode:
-            # print(f"sent message to {number_current_users} users")
+
+        if self.debug_mode and not self.minimum_message:
+            print(f"sent message to {number_current_users} users")
 
     async def notify_exit(self, username):
         """ユーザ退出メッセージを全クライアントに送信"""
@@ -156,18 +183,21 @@ class UDPChatServer:
         send_data = bytes([adminname_len]) + adminname_bytes + goodbye_message_bytes
 
         await self.broadcast(send_data)
-        if self.debug_mode:
+
+        if self.debug_mode and not self.minimum_message:
             print(f"[DEBUG] {username} has left the chat.")
 
     async def handle_message(self, data, address):
         """クライアントからのメッセージを受信して処理する"""
         async with self.semaphore:
-            # print("\nwaiting to receive message")
+            if not self.minimum_message:
+                print("\nwaiting to receive message")
             if not data:
                 return
 
             # バイト列をそのまま表示する
-            # print(f"[DEBUG] Raw received data: {data}")
+            if not self.minimum_message:
+                print(f"[DEBUG] Raw received data: {data}")
 
             # 受信したメッセージを分解する（deserialize）
             # 最初の１バイトを username_len として読み取る
@@ -181,20 +211,39 @@ class UDPChatServer:
             message_bytes = data[1 + username_len :]
             message = message_bytes.decode("utf-8")
 
-            # print(f"[DEBUG] Received bytes from {address}")
-            # print(f"  - Username: {username} (length: {username_len})")
-            # print(f"  - Message: {message}")
+            if not self.minimum_message:
+                print(f"[DEBUG] Received bytes from {address}")
+                print(f"  - Username: {username} (length: {username_len})")
+                print(f"  - Message: {message}")
 
-            is_goodbye_message = self.check_user(username, address, message)
+            # is_goodbye_message = self.check_user(username, address, message)
+            # if is_goodbye_message:
+            #     await self.notify_exit(username)
+            # else:
+            #     await self.broadcast(data)
+
+            # ユーザ登録を並列処理として管理する
+            # asyncio.create_task(self.register_user(username, address, message))
+            tasks = [
+                asyncio.create_task(self.check_user(username, address, message))
+            ]
+            results = await asyncio.gather(*tasks)
+            is_goodbye_message = results[0]
 
             if is_goodbye_message:
                 await self.notify_exit(username)
             else:
                 await self.broadcast(data)
 
+    # async def register_user(self, username, address, message):
+    #     is_goodbye_message = await self.check_user(username, address, message)
+    #     if is_goodbye_message:
+    #         await self.notify_exit(username)
+
+
 async def main():
     server = UDPChatServer()
-    await server.start(debug_mode=True)
+    await server.start(debug_mode=True, minimum_message=True)
 
 # サーバの起動
 if __name__ == "__main__":
