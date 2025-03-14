@@ -8,33 +8,18 @@ import queue
 import asyncio
 
 
-class UDPChatServer:
-    def __init__(
-        self,
-        server_address="0.0.0.0",
-        server_port=9001,
-        session_lifetime=1800,
-        check_interval=10,
-        alert_message=20,
-    ):
-        ###########
-        # 設定情報
-        ###########
+class ServerState:
+    def __init__(self, server_address, server_port):
         self.debug_mode = False
         self.minimum_message = False
         self.adminname = "admin"
         self.server_address = server_address
         self.server_port = server_port
-        self.session_lifetime_seconds = session_lifetime
-        self.lifetime_check_interval_seconds = check_interval
-        self.lifetime_alert_seconds = alert_message
+        self.session_lifetime_seconds = 1800
+        self.lifetime_check_interval_seconds = 10
+        self.lifetime_alert_seconds = 20
         self.goodbye_message = "{} さんの接続が終了しました。"
         self.alert_message = "送信がない場合、残り {} 秒ほどで接続が終了します。"
-        self.packet_count = 0
-        self.semaphore = asyncio.Semaphore(100)  # 最大100並列処理
-        self.lock = asyncio.Lock()
-        self.running = True
-        self.shutdown_event = asyncio.Event()
 
         # ソケット設定
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -42,37 +27,37 @@ class UDPChatServer:
         self.sock.bind((server_address, server_port))
         self.sock.setblocking(False)
 
-        # クライアントを管理する
+        # クライアント管理
         self.users_dict = {}
+        self.packet_count = 0
 
-        # スレッド間通信用
-        self.exit_user_queue = asyncio.Queue()
+        # 非同期制御関係
+        self.lock = asyncio.Lock()
+        self.shutdown_event = asyncio.Event()
         self.message_queue = asyncio.Queue(maxsize=10000)
+        self.exit_user_queue = asyncio.Queue()
 
-    async def handle_exit_command(self):
-        """サーバ用終了コマンド exit を処理する"""
-        loop = asyncio.get_running_loop()
-        while self.running:
-            command = await loop.run_in_executor(
-                None, input, "Enter 'exit' to stop the server.\n"
-            )
-            if command.lower() == "exit":
-                print("stopping the server...")
-                self.running = False
-                self.shutdown_event.set()
-                break
+        self.semaphore = asyncio.Semaphore(100)  # 最大100並列処理
+        self.running = True
 
-    async def start(self, debug_mode, minimum_message):
+
+class UDPChatServer:
+    def __init__(self, state):
+        self.state = state
+
+    async def start(self, debug_mode=False, minimum_message=False):
         """サーバを起動してクライアントからのメッセージを待つ"""
-        self.debug_mode = debug_mode
-        self.minimum_message = minimum_message
-        print(f"starting up on port {self.server_address}:{self.server_port}")
+        self.state.debug_mode = debug_mode
+        self.state.minimum_message = minimum_message
+        print(
+            f"starting up on port {self.state.server_address}:{self.state.server_port}"
+        )
 
         # ループを明示的に取得
         loop = asyncio.get_running_loop()
 
         # ソケットの読み込みイベントをループに追加
-        loop.add_reader(self.sock.fileno(), self.receive_message)
+        loop.add_reader(self.state.sock.fileno(), self.receive_message)
 
         # タイムアウト監視をタスクとして開始
         asyncio.create_task(self.check_users_lifetime())
@@ -84,24 +69,20 @@ class UDPChatServer:
         asyncio.create_task(self.handle_exit_command())
 
         # イベントループを維持する
-        await self.shutdown_event.wait()
+        await self.state.shutdown_event.wait()
 
-        time.sleep(1)
-        self.sock.close()
+        self.state.sock.close()
         print("server socket closed.")
 
-    ##########
-    # 以下、処理
-    ##########
     def receive_message(self):
         """受信イベントで呼び出されるコールバック"""
         try:
-            data, addr = self.sock.recvfrom(4096)
-            self.packet_count += 1
+            data, addr = self.state.sock.recvfrom(4096)
+            self.state.packet_count += 1
 
             # キューが満杯になっても無視しない
             try:
-                self.message_queue.put_nowait((data, addr))
+                self.state.message_queue.put_nowait((data, addr))
             except asyncio.QueueFull:
                 print("[WARNING] Message queue is full. Dropping packet.")
 
@@ -112,117 +93,32 @@ class UDPChatServer:
 
     async def process_incoming_packets(self):
         while True:
-            data, addr = await self.message_queue.get()
+            data, addr = await self.state.message_queue.get()
             asyncio.create_task(self.handle_message(data, addr))
 
-    async def send_data(self, data, addr):
-        """非同期でソケットにデータを送信"""
+    async def handle_exit_command(self):
+        """サーバ用終了コマンド exit を処理する"""
         loop = asyncio.get_running_loop()
-
-        if not self.minimum_message:
-            print(
-                f"[DEBUG] Sending data to {addr} following message: {data}", flush=True
+        while self.state.running:
+            command = await loop.run_in_executor(
+                None, input, "Enter 'exit' to stop the server.\n"
             )
-        await loop.run_in_executor(None, self.sock.sendto, data, addr)
-
-    def show_users(self):
-        """現在の接続ユーザと受信累計パケット数を表示"""
-        print(
-            f"[DEBUG] Active users: {len(self.users_dict)}, Received packets: {self.packet_count}"
-        )
-        if not self.minimum_message:
-            print(f"[DEBUG] users_dict:\n {self.users_dict}")
-
-    async def check_user(self, username, address, message):
-        """ユーザの存在を確認し、リストに追加する"""
-        # 先に存在確認のみ行う
-        if username in self.users_dict:
-            if message == "exit":
-                async with self.lock:
-                    del self.users_dict[username]
-                return True
-
-            # メッセージを受信するたびに生存時間を戻す
-            self.users_dict[username][1] = self.session_lifetime_seconds
-            return False
-
-        async with self.lock:
-            self.users_dict[username] = [address, self.session_lifetime_seconds]
-            if not self.minimum_message:
-                self.show_users()
-            return False
-
-    async def check_users_lifetime(self):
-        """クライアントの生存時間を監視するスレッド"""
-        while True:
-            self.show_users()
-            await asyncio.sleep(self.lifetime_check_interval_seconds)
-
-            # 辞書サイズが変わるため、キーをリストに変換してループ
-            for username in list(self.users_dict.keys()):
-                self.users_dict[username][1] -= self.lifetime_check_interval_seconds
-                remaining_lifetime = self.users_dict[username][1]
-
-                # タイムアウトしたユーザを削除
-                if remaining_lifetime <= 0:
-                    async with self.lock:
-                        del self.users_dict[username]
-                    await self.exit_user_queue.put(username)
-
-                elif (
-                    self.lifetime_check_interval_seconds
-                    < remaining_lifetime
-                    <= self.lifetime_alert_seconds
-                ):
-                    await self.send_alert(username)
-
-    async def send_alert(self, username):
-        """接続が切れそうなユーザに警告を送信"""
-        adminname_bytes = self.adminname.encode("utf-8")
-        adminname_len = len(adminname_bytes)
-        alert_message_bytes = self.alert_message.format(
-            self.lifetime_check_interval_seconds
-        ).encode("utf-8")
-        send_alert = bytes([adminname_len]) + adminname_bytes + alert_message_bytes
-
-        await self.send_data(send_alert, self.users_dict[username][0])
-
-        if self.debug_mode and not self.minimum_message:
-            print(f"sent alert message to {self.users_dict[username][0]}")
-
-    async def broadcast(self, data):
-        """全クライアントにメッセージを送信"""
-        current_users = self.users_dict.copy()
-        number_current_users = len(current_users)
-        for user, (addr, _) in current_users.items():
-            await self.send_data(data, addr)
-            await asyncio.sleep(0)
-
-        if self.debug_mode and not self.minimum_message:
-            print(f"sent message to {number_current_users} users")
-
-    async def notify_exit(self, username):
-        """ユーザ退出メッセージを全クライアントに送信"""
-        goodbye_message_bytes = self.goodbye_message.format(username).encode("utf-8")
-        adminname_bytes = self.adminname.encode("utf-8")
-        adminname_len = len(adminname_bytes)
-        send_data = bytes([adminname_len]) + adminname_bytes + goodbye_message_bytes
-
-        await self.broadcast(send_data)
-
-        if self.debug_mode and not self.minimum_message:
-            print(f"[DEBUG] {username} has left the chat.")
+            if command.lower() == "exit":
+                print("stopping the server...")
+                self.state.running = False
+                self.state.shutdown_event.set()
+                break
 
     async def handle_message(self, data, address):
         """クライアントからのメッセージを受信して処理する"""
-        async with self.semaphore:
-            if not self.minimum_message:
+        async with self.state.semaphore:
+            if not self.state.minimum_message:
                 print("\nwaiting to receive message")
             if not data:
                 return
 
             # バイト列をそのまま表示する
-            if not self.minimum_message:
+            if not self.state.minimum_message:
                 print(f"[DEBUG] Raw received data: {data}")
 
             # 受信したメッセージを分解する（deserialize）
@@ -237,7 +133,7 @@ class UDPChatServer:
             message_bytes = data[1 + username_len :]
             message = message_bytes.decode("utf-8")
 
-            if not self.minimum_message:
+            if not self.state.minimum_message:
                 print(f"[DEBUG] Received bytes from {address}")
                 print(f"  - Username: {username} (length: {username_len})")
                 print(f"  - Message: {message}")
@@ -264,9 +160,115 @@ class UDPChatServer:
     #     if is_goodbye_message:
     #         await self.notify_exit(username)
 
+    async def broadcast(self, data):
+        """全クライアントにメッセージを送信"""
+        current_users = self.state.users_dict.copy()
+        number_current_users = len(current_users)
+        for user, (addr, _) in current_users.items():
+            await self.send_data(data, addr)
+            await asyncio.sleep(0)
+
+        if self.state.debug_mode and not self.state.minimum_message:
+            print(f"sent message to {number_current_users} users")
+
+    async def send_data(self, data, addr):
+        """非同期でソケットにデータを送信"""
+        loop = asyncio.get_running_loop()
+
+        if not self.state.minimum_message:
+            print(
+                f"[DEBUG] Sending data to {addr} following message: {data}", flush=True
+            )
+        await loop.run_in_executor(None, self.state.sock.sendto, data, addr)
+
+    def show_users(self):
+        """現在の接続ユーザと受信累計パケット数を表示"""
+        print(
+            f"[DEBUG] Active users: {len(self.state.users_dict)}, Received packets: {self.state.packet_count}"
+        )
+        if not self.state.minimum_message:
+            print(f"[DEBUG] users_dict:\n {self.state.users_dict}")
+
+    async def check_user(self, username, address, message):
+        """ユーザの存在を確認し、リストに追加する"""
+        # 先に存在確認のみ行う
+        if username in self.state.users_dict:
+            if message == "exit":
+                async with self.state.lock:
+                    del self.state.users_dict[username]
+                return True
+
+            # メッセージを受信するたびに生存時間を戻す
+            self.state.users_dict[username][1] = self.state.session_lifetime_seconds
+            return False
+
+        async with self.state.lock:
+            self.state.users_dict[username] = [
+                address,
+                self.state.session_lifetime_seconds,
+            ]
+            if not self.state.minimum_message:
+                self.show_users()
+            return False
+
+    async def check_users_lifetime(self):
+        """クライアントの生存時間を監視するスレッド"""
+        while True:
+            self.show_users()
+            await asyncio.sleep(self.state.lifetime_check_interval_seconds)
+
+            # 辞書サイズが変わるため、キーをリストに変換してループ
+            for username in list(self.state.users_dict.keys()):
+                self.state.users_dict[username][
+                    1
+                ] -= self.state.lifetime_check_interval_seconds
+                remaining_lifetime = self.state.users_dict[username][1]
+
+                # タイムアウトしたユーザを削除
+                if remaining_lifetime <= 0:
+                    async with self.state.lock:
+                        del self.state.users_dict[username]
+                    await self.state.exit_user_queue.put(username)
+
+                elif (
+                    self.state.lifetime_check_interval_seconds
+                    < remaining_lifetime
+                    <= self.state.lifetime_alert_seconds
+                ):
+                    await self.send_alert(username)
+
+    async def send_alert(self, username):
+        """接続が切れそうなユーザに警告を送信"""
+        adminname_bytes = self.state.adminname.encode("utf-8")
+        adminname_len = len(adminname_bytes)
+        alert_message_bytes = self.state.alert_message.format(
+            self.state.lifetime_check_interval_seconds
+        ).encode("utf-8")
+        send_alert = bytes([adminname_len]) + adminname_bytes + alert_message_bytes
+
+        await self.send_data(send_alert, self.state.users_dict[username][0])
+
+        if self.state.debug_mode and not self.state.minimum_message:
+            print(f"sent alert message to {self.state.users_dict[username][0]}")
+
+    async def notify_exit(self, username):
+        """ユーザ退出メッセージを全クライアントに送信"""
+        goodbye_message_bytes = self.state.goodbye_message.format(username).encode(
+            "utf-8"
+        )
+        adminname_bytes = self.state.adminname.encode("utf-8")
+        adminname_len = len(adminname_bytes)
+        send_data = bytes([adminname_len]) + adminname_bytes + goodbye_message_bytes
+
+        await self.broadcast(send_data)
+
+        if self.state.debug_mode and not self.state.minimum_message:
+            print(f"[DEBUG] {username} has left the chat.")
+
 
 async def main():
-    server = UDPChatServer()
+    state = ServerState(server_address="0.0.0.0", server_port=9001)
+    server = UDPChatServer(state)
     await server.start(debug_mode=True, minimum_message=True)
 
 
