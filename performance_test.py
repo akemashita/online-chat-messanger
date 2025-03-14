@@ -10,6 +10,7 @@ RECEIVE_REPORT_PORT = 9003
 received_count = 0
 lock = threading.Lock()
 
+
 def receive_results():
     global received_count
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -31,6 +32,7 @@ def receive_results():
             break
 
     sock.close()
+
 
 def main():
     # 集計スレッドを起動
@@ -55,16 +57,20 @@ def main():
     for p in processes:
         p.wait()
 
-
     time.sleep(1)
 
     # 結果表示
     print("負荷テスト完了！")
-    print(f"Total Clients: {NUM_CLIENTS * 20}")
-    print(f"Total Packets Sent: {NUM_CLIENTS * 20 * 10}")
-    print(f"Total Packets Received: {received_count}")
-    throughput = received_count / (NUM_CLIENTS * 20)
-    print(f"Throughput: {throughput:.2f} packets/client")
+    number_of_clients = NUM_CLIENTS * 20  # 20 threds/process
+    total_packets_to_server = number_of_clients * 10
+    total_packets_from_server = (number_of_clients * 10) * number_of_clients
+    received_rate = received_count / total_packets_from_server * 100
+    print(f"- 全クライアント数： {number_of_clients}")
+    print(f"- サーバへ送った全パケット数： {total_packets_to_server}")
+    print(f"- サーバが送る全パケット数（理論値）： {total_packets_from_server}")
+    print(f"- サーバから受け取った全パケット数（観測値）： {received_count}")
+    print(f"- 受信率（観測値／理論値）: {received_rate:.1f} %")
+
 
 if __name__ == "__main__":
     main()
