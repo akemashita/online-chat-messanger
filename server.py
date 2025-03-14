@@ -33,6 +33,8 @@ class UDPChatServer:
         self.packet_count = 0
         self.semaphore = asyncio.Semaphore(100)  # 最大100並列処理
         self.lock = asyncio.Lock()
+        self.running = True
+        self.shutdown_event = asyncio.Event()
 
         # ソケット設定
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -46,6 +48,19 @@ class UDPChatServer:
         # スレッド間通信用
         self.exit_user_queue = asyncio.Queue()
         self.message_queue = asyncio.Queue(maxsize=10000)
+
+    async def handle_exit_command(self):
+        """サーバ用終了コマンド exit を処理する"""
+        loop = asyncio.get_running_loop()
+        while self.running:
+            command = await loop.run_in_executor(
+                None, input, "Enter 'exit' to stop the server.\n"
+            )
+            if command.lower() == "exit":
+                print("stopping the server...")
+                self.running = False
+                self.shutdown_event.set()
+                break
 
     async def start(self, debug_mode, minimum_message):
         """サーバを起動してクライアントからのメッセージを待つ"""
@@ -65,7 +80,15 @@ class UDPChatServer:
         # 非同期でメッセージを処理
         asyncio.create_task(self.process_incoming_packets())
 
-        await asyncio.Event().wait()
+        # 非同期でサーバ終了用 exit コマンドを処理
+        asyncio.create_task(self.handle_exit_command())
+
+        # イベントループを維持する
+        await self.shutdown_event.wait()
+
+        time.sleep(1)
+        self.sock.close()
+        print("server socket closed.")
 
     ##########
     # 以下、処理
@@ -97,12 +120,16 @@ class UDPChatServer:
         loop = asyncio.get_running_loop()
 
         if not self.minimum_message:
-            print(f"[DEBUG] Sending data to {addr} following message: {data}", flush=True)
+            print(
+                f"[DEBUG] Sending data to {addr} following message: {data}", flush=True
+            )
         await loop.run_in_executor(None, self.sock.sendto, data, addr)
 
     def show_users(self):
         """現在の接続ユーザと受信累計パケット数を表示"""
-        print(f"[DEBUG] Active users: {len(self.users_dict)}, Received packets: {self.packet_count}")
+        print(
+            f"[DEBUG] Active users: {len(self.users_dict)}, Received packets: {self.packet_count}"
+        )
         if not self.minimum_message:
             print(f"[DEBUG] users_dict:\n {self.users_dict}")
 
@@ -124,7 +151,6 @@ class UDPChatServer:
             if not self.minimum_message:
                 self.show_users()
             return False
-
 
     async def check_users_lifetime(self):
         """クライアントの生存時間を監視するスレッド"""
@@ -224,9 +250,7 @@ class UDPChatServer:
 
             # ユーザ登録を並列処理として管理する
             # asyncio.create_task(self.register_user(username, address, message))
-            tasks = [
-                asyncio.create_task(self.check_user(username, address, message))
-            ]
+            tasks = [asyncio.create_task(self.check_user(username, address, message))]
             results = await asyncio.gather(*tasks)
             is_goodbye_message = results[0]
 
@@ -244,6 +268,7 @@ class UDPChatServer:
 async def main():
     server = UDPChatServer()
     await server.start(debug_mode=True, minimum_message=True)
+
 
 # サーバの起動
 if __name__ == "__main__":

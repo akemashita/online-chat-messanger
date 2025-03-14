@@ -99,10 +99,15 @@ class UDPClient:
                     send_data = (
                         bytes([username_len]) + self.username_bytes + own_message_bytes
                     )
-                    sent = self.sock.sendto(
-                        send_data, (self.server_address, self.server_port)
-                    )
-                    # print(f"[DEBUG] send_data: {send_data}")
+
+                    # 送信データが4096バイトを超えていなければサーバに送る
+                    if not len(send_data) > 4096:
+                        sent = self.sock.sendto(
+                            send_data, (self.server_address, self.server_port)
+                        )
+                        # print(f"[DEBUG] send_data: {send_data}")
+                    else:
+                        print("エラー：入力が多すぎます。もう少し減らしてください")
 
                 #### メッセージ受信 ####
                 try:
@@ -146,6 +151,10 @@ class UDPClient:
                 "\033[F\033[K\033[F"
             )  # １行上に移動、入力行をクリア、１行上に移動
             sys.stdout.flush()
+
+            if not message:
+                # 入力がなかった場合はサーバに送信しない
+                continue
 
             self.send_queue.put(message)
 
