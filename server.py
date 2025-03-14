@@ -37,9 +37,17 @@ class UDPChatServer:
 
         # タイムアウト監視スレッドを起動する
         threading.Thread(target=self.check_users_lifetime, daemon=True).start()
-
+        threading.Thread(target=self.receive_message, daemon=True).start()
         while True:
-            self.receive_message()
+            # self.receive_message()
+            command = input("Enter 'exit' to stop the server.")
+            if command.lower() == "exit":
+                print("stopping the server...")
+                break
+
+        time.sleep(1)
+        self.sock.close()
+        print("server socket closed.")
 
     ##########
     # 以下、処理
@@ -123,36 +131,37 @@ class UDPChatServer:
     def receive_message(self):
         """クライアントからのメッセージを受信して処理する"""
         print("\nwaiting to receive message")
-        data, address = self.sock.recvfrom(4096)
+        while True:
+            data, address = self.sock.recvfrom(4096)
 
-        if not data:
-            return
+            if not data:
+                return
 
-        # バイト列をそのまま表示する
-        print(f"[DEBUG] Raw received data: {data}")
+            # バイト列をそのまま表示する
+            print(f"[DEBUG] Raw received data: {data}")
 
-        # 受信したメッセージを分解する（deserialize）
-        # 最初の１バイトを username_len として読み取る
-        username_len = data[0]
+            # 受信したメッセージを分解する（deserialize）
+            # 最初の１バイトを username_len として読み取る
+            username_len = data[0]
 
-        # 次の username_len バイトがユーザ名
-        username_bytes = data[1 : 1 + username_len]
-        username = username_bytes.decode("utf-8")
+            # 次の username_len バイトがユーザ名
+            username_bytes = data[1 : 1 + username_len]
+            username = username_bytes.decode("utf-8")
 
-        # 残りのバイトがメッセージ
-        message_bytes = data[1 + username_len :]
-        message = message_bytes.decode("utf-8")
+            # 残りのバイトがメッセージ
+            message_bytes = data[1 + username_len :]
+            message = message_bytes.decode("utf-8")
 
-        print(f"[DEBUG] Received bytes from {address}")
-        print(f"  - Username: {username} (length: {username_len})")
-        print(f"  - Message: {message}")
+            print(f"[DEBUG] Received bytes from {address}")
+            print(f"  - Username: {username} (length: {username_len})")
+            print(f"  - Message: {message}")
 
-        is_goodbye_message = self.check_user(username, address, message)
+            is_goodbye_message = self.check_user(username, address, message)
 
-        if is_goodbye_message:
-            self.notify_exit(username)
-        else:
-            self.broadcast(data)
+            if is_goodbye_message:
+                self.notify_exit(username)
+            else:
+                self.broadcast(data)
 
 
 # サーバの起動
