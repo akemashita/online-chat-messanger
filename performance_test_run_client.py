@@ -12,7 +12,7 @@ SERVER_ADDRESS = "127.0.0.1"
 SERVER_PORT = 9001
 SEND_REPORT_ADDRESS = "127.0.0.1"
 SEND_REPORT_PORT = 9003
-WAIT_BEFORE_MESSAGE_SEND =80
+WAIT_BEFORE_MESSAGE_SEND = 80
 SEND_INTERVAL_MIN = 20
 SEND_INTERVAL_MAX = 60
 
@@ -22,6 +22,11 @@ def receive_loop(sock, local_count):
     time.sleep(WAIT_BEFORE_MESSAGE_SEND)
 
     sock.settimeout(1800)
+
+    # 受信バッファのクリア（登録情報をカウントしない）
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 0)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+
     try:
         while True:
             try:
@@ -47,7 +52,9 @@ def run_client(client_id, thread_id, local_count):
         # recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         # recv_sock.bind(("", 0))
 
-        recv_thread = threading.Thread(target=receive_loop, args=(sock, local_count), daemon=True)
+        recv_thread = threading.Thread(
+            target=receive_loop, args=(sock, local_count), daemon=True
+        )
         recv_thread.start()
 
         # 初回送信
@@ -106,7 +113,9 @@ def start_threads(client_id):
     local_counts = [[0] for _ in range(THREADS_PER_PROCESS)]
 
     for i in range(THREADS_PER_PROCESS):
-        thread = threading.Thread(target=run_client, args=(client_id, i, local_counts[i]))
+        thread = threading.Thread(
+            target=run_client, args=(client_id, i, local_counts[i])
+        )
         thread.start()
         threads.append(thread)
         time.sleep(0.01)
@@ -121,6 +130,7 @@ def start_threads(client_id):
 
     # パケット受信数を performance_test.py に送信
     report_results(client_id, total_count)
+
 
 if __name__ == "__main__":
     CLIENT_ID = int(sys.argv[1])
