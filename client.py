@@ -1,5 +1,5 @@
 # client.py
-# stage1
+# stage2
 
 import socket
 import threading
@@ -7,6 +7,20 @@ import queue
 import sys
 import readline
 import time
+
+
+class Client:
+    def __init__(self, server_ip, server_tcp_port):
+        self.server_ip = server_ip
+        self.server_tcp_port = server_tcp_port
+
+    def tcp_request(self, request_data):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.connect((self.server_ip, self.server_tcp_port))
+            sock.sendall(request_data)
+            response = sock.recv(1024)
+            print(f"[TCP] Response: {response}")
+            return response
 
 
 class UDPClient:
@@ -177,6 +191,10 @@ class UDPClient:
 
 # メイン処理：受信メッセージの表示
 if __name__ == "__main__":
+    # TCPでなにか送ってみる
+    tcp_client = Client("127.0.0.1", 9101)
+    tcp_client.tcp_request(b"Hello TCP")
+
     server_address = input("Type in the server's address to connect to: ")
     server_port = 9001
 

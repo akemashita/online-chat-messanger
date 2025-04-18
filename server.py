@@ -1,5 +1,5 @@
 # server.py
-# stage1
+# stage2
 
 import socket
 import threading
@@ -9,12 +9,13 @@ import asyncio
 
 
 class ServerState:
-    def __init__(self, server_address, server_port):
+    def __init__(self, server_address, server_port, server_tcp_port):
         self.debug_mode = False
         self.minimum_message = False
         self.adminname = "admin"
         self.server_address = server_address
         self.server_port = server_port
+        self.server_tcp_port = server_tcp_port
         self.session_lifetime_seconds = 1800
         self.lifetime_check_interval_seconds = 10
         self.lifetime_alert_seconds = 20
@@ -26,6 +27,8 @@ class ServerState:
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2**24)
         self.sock.bind((server_address, server_port))
         self.sock.setblocking(False)
+        self.tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.tcp_sock.bind(("", server_tcp_port))
 
         # クライアント管理
         self.users_dict = {}
@@ -39,6 +42,24 @@ class ServerState:
 
         self.semaphore = asyncio.Semaphore(100)  # 最大100並列処理
         self.running = True
+
+
+class ChatServer:
+    def __init__(self, state):
+        self.state = state
+        self.state.tcp_sock.listen()
+
+    def handle_tcp_connection(self):
+        print(
+            f"starting up on port {self.state.server_address}:{self.state.server_tcp_port}"
+        )
+        while True:
+            conn, addr = self.state.tcp_sock.accept()
+            print(f"[TCP] Connected by {addr}")
+            data = conn.recv(1024)
+            print(f"[TCP] Received: {data}")
+            # TODO: TCRPの解析・トークン生成
+            conn.close()
 
 
 class UDPChatServer:
@@ -121,6 +142,7 @@ class UDPChatServer:
             if not self.state.minimum_message:
                 print(f"[DEBUG] Raw received data: {data}")
 
+            # TODO:トークン検証とリレー処理
             # 受信したメッセージを分解する（deserialize）
             # 最初の１バイトを username_len として読み取る
             username_len = data[0]
@@ -266,10 +288,22 @@ class UDPChatServer:
             print(f"[DEBUG] {username} has left the chat.")
 
 
+async def run_tcp_loop(tcp_server):
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, tcp_server.handle_tcp_connection)
+
+
 async def main():
-    state = ServerState(server_address="0.0.0.0", server_port=9001)
+    state = ServerState(
+        server_address="0.0.0.0", server_port=9001, server_tcp_port=9101
+    )
     server = UDPChatServer(state)
-    await server.start(debug_mode=True, minimum_message=True)
+    server_tcp = ChatServer(state)
+
+    # UDP + TCP を並列で実行
+    await asyncio.gather(
+        server.start(debug_mode=True, minimum_message=True), run_tcp_loop(server_tcp)
+    )
 
 
 # サーバの起動
