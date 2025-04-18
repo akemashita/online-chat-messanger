@@ -9,14 +9,40 @@ import readline
 import time
 
 
-class Client:
+class State:
     def __init__(self, server_ip, server_tcp_port):
         self.server_ip = server_ip
         self.server_tcp_port = server_tcp_port
 
+        # 状態管理用の変数
+        self.username = None
+        self.token = None
+        self.room_name = None
+
+    def set_username(self, name):
+        self.username = name
+
+    def set_token(self, token):
+        self.token = token
+
+    def set_room_name(self, room_name):
+        self.room_name = room_name
+
+    def get_identity_info(self):
+        return {
+            "username": self.username,
+            "token": self.token,
+            "room_name": self.room_name,
+        }
+
+
+class Client:
+    def __init__(self, state):
+        self.state = state
+
     def tcp_request(self, request_data):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.connect((self.server_ip, self.server_tcp_port))
+            sock.connect((self.state.server_ip, self.state.server_tcp_port))
             sock.sendall(request_data)
             response = sock.recv(1024)
             print(f"[TCP] Response: {response}")
@@ -192,8 +218,17 @@ class UDPClient:
 # メイン処理：受信メッセージの表示
 if __name__ == "__main__":
     # TCPでなにか送ってみる
-    tcp_client = Client("127.0.0.1", 9101)
+    state = State("127.0.0.1", 9101)
+    tcp_client = Client(state)
     tcp_client.tcp_request(b"Hello TCP")
+
+    # ユーザ入力の代わり
+    state.set_username("あけました")
+    state.set_token("dummy_token_123")
+    state.set_room_name("default")
+
+    # 確認
+    print("現在の状態:", state.get_identity_info())
 
     server_address = input("Type in the server's address to connect to: ")
     server_port = 9001
