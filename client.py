@@ -218,17 +218,38 @@ class UDPClient:
 # メイン処理：受信メッセージの表示
 if __name__ == "__main__":
     # TCPでなにか送ってみる
-    state = State("127.0.0.1", 9101)
-    tcp_client = Client(state)
-    tcp_client.tcp_request(b"Hello TCP")
+    client_state = State("127.0.0.1", 9101)
+    tmp_room_name = "default"
+    tmp_room_name_bytes = tmp_room_name.encode("utf-8")
+    tmp_token = "dummy_token_123"
+    tmp_username = "あけました"
 
     # ユーザ入力の代わり
-    state.set_username("あけました")
-    state.set_token("dummy_token_123")
-    state.set_room_name("default")
+    client_state.set_username(tmp_username)
+    client_state.set_token(tmp_token)
+    client_state.set_room_name(tmp_room_name)
 
     # 確認
-    print("現在の状態:", state.get_identity_info())
+    print("現在の状態:", client_state.get_identity_info())
+
+    payload_bytes = b"Hello TCP"
+    room_name_size = len(tmp_room_name)
+    payload_size = len(payload_bytes)
+    payload_size_bytes = payload_size.to_bytes(29, byteorder="big")
+    operation = 1
+    tcrp_state = 0
+
+    header = (
+        bytes([room_name_size])
+        + bytes([operation])
+        + bytes([tcrp_state])
+        + payload_size_bytes
+    )
+
+    body = tmp_room_name_bytes + payload_bytes
+
+    tcp_client = Client(client_state)
+    tcp_client.tcp_request(header + body)
 
     server_address = input("Type in the server's address to connect to: ")
     server_port = 9001

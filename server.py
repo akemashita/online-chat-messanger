@@ -59,7 +59,64 @@ class ChatServer:
             data = conn.recv(1024)
             print(f"[TCP] Received: {data}")
             # TODO: TCRPの解析・トークン生成
+
+            message = TCRPMessage.from_bytes(data)
+            print("room: ", message.room_name)
+            print("operation: ", message.operation)
+            print("state: ", message.state)
+            print("payload: ", message.payload)
             conn.close()
+
+
+class TCRPMessage:
+    HEADER_SIZE = 32
+    ROOM_NAME_MAX_LEN = 28
+    PAYLOAD_MAX_LEN = 28
+    OPERATION_SIZE_BYTES = 29
+
+    def __init__(self, room_name, operation, state, payload_bytes):
+        self.room_name = room_name.encode("utf-8")
+        self.operation = operation
+        self.state = state
+        self.payload = payload_bytes
+
+        if len(self.room_name) > self.ROOM_NAME_MAX_LEN:
+            raise ValueError("Room name too long")
+        if len(self.payload) > self.PAYLOAD_MAX_LEN:
+            raise ValueError("Payload too long")
+
+    def to_bytes(self):
+        room_name_size = len(self.room_name)
+        payload_size = len(self.payload)
+        payload_size_bytes = payload_size.to_bytes(
+            self.OPERATION_SIZE_BYTES, byteorder="big"
+        )
+
+        header = (
+            bytes([room_name_size])
+            + bytes([self.operation])
+            + bytes([self.state])
+            + payload_size_bytes
+        )
+
+        body = self.room_name + self.payload
+        return header + body
+
+    @classmethod
+    def from_bytes(cls, data):
+        if len(data) < cls.HEADER_SIZE:
+            raise ValueError("Data too short for header")
+
+        room_name_size = data[0]
+        operation = data[1]
+        state = data[2]
+        payload_size = int.from_bytes(data[3:32], byteorder="big")
+
+        room_name_end = cls.HEADER_SIZE + room_name_size
+        room_name = data[32:room_name_end]
+        payload = data[room_name_end : room_name_end + payload_size]
+
+        return cls(room_name.decode("utf-8"), operation, state, payload)
 
 
 class UDPChatServer:
