@@ -48,6 +48,8 @@ class ChatServer:
     def __init__(self, state):
         self.state = state
         self.state.tcp_sock.listen()
+        self.rooms = {}  # { room_name: {"host": token, "members": [token]}}
+        self.tokens = {}  # { token_bytes: username_str }
 
     def handle_tcp_connection(self):
         print(
@@ -65,17 +67,57 @@ class ChatServer:
             print("operation: ", message.operation)
             print("state: ", message.state)
             print("payload: ", message.payload)
+
+            if message.operation == 1 and message.state == 0:
+                import secrets
+
+                username = message.payload.decode("utf-8")
+                room = message.room_name.decode("utf-8")
+
+                # トークン生成
+                token = secrets.token_bytes(
+                    32
+                )  # 必要に応じて今後サイズを調整（最大255バイト）
+
+                # ルーム新規作成
+                if room not in self.rooms:
+                    self.rooms[room] = {"host": token, "members": [token]}
+                    self.tokens[token] = username
+
+                    # 応答パケット作成
+                    response = TCRPMessage(
+                        room_name=room,
+                        operation=1,
+                        state=2,  # 完了
+                        payload_bytes=token,
+                    )
+
+                    conn.sendall(response.to_bytes())
+                    print(
+                        f"[TCP] 新規ルームを作成しました。ルーム名：'{room}'、トークン：'{token.hex()[:8]}'"
+                    )
+
+                else:
+                    print(f"[TCP] ルーム名 '{room}' はすでに存在しています。")
+                    conn.sendall(b"ERROR: Room already exists")
+
             conn.close()
 
 
 class TCRPMessage:
     HEADER_SIZE = 32
     ROOM_NAME_MAX_LEN = 28
-    PAYLOAD_MAX_LEN = 28
+    PAYLOAD_MAX_LEN = 229
     OPERATION_SIZE_BYTES = 29
 
     def __init__(self, room_name, operation, state, payload_bytes):
-        self.room_name = room_name.encode("utf-8")
+        if isinstance(room_name, str):
+            self.room_name = room_name.encode("utf-8")
+        elif isinstance(room_name, bytes):
+            self.room_name = room_name
+        else:
+            raise TypeError("room_name must be str or bytes")
+
         self.operation = operation
         self.state = state
         self.payload = payload_bytes
