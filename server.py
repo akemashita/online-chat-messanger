@@ -66,12 +66,14 @@ class ChatServer:
             print("room: ", message.room_name)
             print("operation: ", message.operation)
             print("state: ", message.state)
-            print("payload: ", message.payload)
+            print("payload: ", message.payload_bytes)
 
-            if message.operation == 1 and message.state == 0:
+            if (
+                message.operation == 1 and message.state == 0
+            ):  # state 0: create room, 1: receive request, 2: done
                 import secrets
 
-                username = message.payload.decode("utf-8")
+                username = message.payload_bytes.decode("utf-8")
                 room = message.room_name.decode("utf-8")
 
                 # トークン生成
@@ -101,6 +103,53 @@ class ChatServer:
                     print(f"[TCP] ルーム名 '{room}' はすでに存在しています。")
                     conn.sendall(b"ERROR: Room already exists")
 
+            # 参加要求の場合の処理
+            if message.operation == 2:
+                import secrets
+
+                username = message.payload_bytes.decode("utf-8")
+                room = message.room_name.decode("utf-8")
+
+                if room not in self.rooms:
+                    err_msg = "ルーム名は存在しません。"
+                    # err_msg = f"'{room}' is not found."
+
+                    # 応答パケット作成
+                    response = TCRPMessage(
+                        room_name=room,
+                        operation=2,
+                        state=2,  # エラー：ルームが存在しない
+                        payload_bytes=err_msg.encode("utf-8"),
+                    )
+
+                    conn.sendall(response.to_bytes())
+                    print(f"[TCP] {err_msg}")
+                    print(f"[TCP] {response.payload_bytes}")
+
+                else:
+
+                    # トークン生成
+                    token = secrets.token_bytes(
+                        32
+                    )  # 必要に応じて今後サイズを調整（最大255バイト）
+
+                    self.rooms[room]["members"].append(token)
+                    self.tokens[token] = username
+
+                    print(f"[DEBUG] rooms: {self.rooms}")
+                    print(f"[DEBUG] tokens: {self.tokens}")
+
+                    # 応答パケット作成
+                    response = TCRPMessage(
+                        room_name=room,
+                        operation=2,
+                        state=1,  # 成功
+                        payload_bytes=token,
+                    )
+
+                    conn.sendall(response.to_bytes())
+                    print(f"[TCP] ルーム名 '{room}' に参加します")
+
             conn.close()
 
 
@@ -120,28 +169,38 @@ class TCRPMessage:
 
         self.operation = operation
         self.state = state
-        self.payload = payload_bytes
+        self.payload_bytes = payload_bytes
 
         if len(self.room_name) > self.ROOM_NAME_MAX_LEN:
             raise ValueError("Room name too long")
-        if len(self.payload) > self.PAYLOAD_MAX_LEN:
+        if len(self.payload_bytes) > self.PAYLOAD_MAX_LEN:
             raise ValueError("Payload too long")
+
+        print(f"[DEBUG] room_name as bytes: {self.room_name}")
+        print(f"[DEBUG] payload as bytes: {self.payload_bytes}")
 
     def to_bytes(self):
         room_name_size = len(self.room_name)
-        payload_size = len(self.payload)
-        payload_size_bytes = payload_size.to_bytes(
+        payload_bytes_size = len(self.payload_bytes)
+        payload_bytes_size_bytes = payload_bytes_size.to_bytes(
             self.OPERATION_SIZE_BYTES, byteorder="big"
         )
+
+        print(f"[DEBUG] payload_bytes_size as int: {payload_bytes_size}")
+        print(f"[DEBUG] payload_bytes_size_bytes as bytes: {payload_bytes_size_bytes}")
 
         header = (
             bytes([room_name_size])
             + bytes([self.operation])
             + bytes([self.state])
-            + payload_size_bytes
+            + payload_bytes_size_bytes
         )
 
-        body = self.room_name + self.payload
+        body = self.room_name + self.payload_bytes
+
+        print(f"[DEBUG] header as bytes: {header}")
+        print(f"[DEBUG] body as bytes: {body}")
+
         return header + body
 
     @classmethod
@@ -154,8 +213,10 @@ class TCRPMessage:
         state = data[2]
         payload_size = int.from_bytes(data[3:32], byteorder="big")
 
-        room_name_end = cls.HEADER_SIZE + room_name_size
-        room_name = data[32:room_name_end]
+        room_name_start = cls.HEADER_SIZE
+        room_name_end = room_name_start + room_name_size
+        room_name = data[room_name_start:room_name_end]
+
         payload = data[room_name_end : room_name_end + payload_size]
 
         return cls(room_name.decode("utf-8"), operation, state, payload)

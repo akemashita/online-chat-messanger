@@ -44,9 +44,52 @@ class Client:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.connect((self.state.server_ip, self.state.server_tcp_port))
             sock.sendall(request_data)
-            response = sock.recv(1024)
-            print(f"[TCP] Response: {response}")
-            return response
+
+            while True:
+                response = sock.recv(1024)
+                print(f"[TCP] Response: {response}")
+
+                result = self.parse_tcp_response(response)
+                print(result)
+
+                print(
+                    f"[TCP] Parsed -> room_name: {result['room_name']}, payload: {result['payload']}(len={len(result['payload'])})"
+                )
+                return response
+
+    def parse_tcp_response(self, response: bytes):
+        room_name_size = response[0]
+        operation = response[1]
+        state = response[2]
+        payload_size = int.from_bytes(response[3:32], byteorder="big")
+        room_name_start = 32
+        room_name_end = room_name_start + room_name_size
+        payload_start = room_name_end
+        payload_end = payload_start + payload_size
+
+        room_name = response[room_name_start:room_name_end].decode(
+            "utf-8", errors="replace"
+        )
+        payload_bytes = response[payload_start:payload_end]
+
+        # 状況に応じてデコード or バイナリ表示
+        if operation in (1, 2) and state in (1, 2) and payload_size == 32:
+            # トークンのとき（32バイトのバイナリ）
+            payload = payload_bytes.hex()
+            print(f"[DEBUG] Token (prefix): {payload[:8]}")
+            print(f"[DEBUG] Token (full)  : {payload}")
+            # TODO:トークンの保存が必要であればここに処理をかく
+
+        else:
+            # 通常のメッセージとみなす
+            payload = payload_bytes.decode("utf-8", errors="replace")
+
+        return {
+            "room_name": room_name,
+            "operation": operation,
+            "state": state,
+            "payload": payload,
+        }
 
 
 class UDPClient:
@@ -220,6 +263,7 @@ if __name__ == "__main__":
     # TCPでなにか送ってみる
     client_state = State("127.0.0.1", 9101)
     tmp_room_name = "default"
+    # tmp_room_name = "default2"
     tmp_room_name_bytes = tmp_room_name.encode("utf-8")
     tmp_token = "dummy_token_123"
     tmp_username = "あけました"
@@ -236,7 +280,13 @@ if __name__ == "__main__":
     room_name_size = len(tmp_room_name)
     payload_size = len(payload_bytes)
     payload_size_bytes = payload_size.to_bytes(29, byteorder="big")
-    operation = 1
+
+    # 新規ルーム作成のときに有効にする
+    # operation = 1
+    # tcrp_state = 0
+
+    # 既存のルームに参加するときに有効にする
+    operation = 2
     tcrp_state = 0
 
     header = (
